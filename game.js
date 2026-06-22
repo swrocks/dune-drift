@@ -1,5 +1,5 @@
 // Dune Drift — a tiny precision platformer at desert dusk.
-// Controls: arrows to move, C to jump, X to dash, R to restart room.
+// Controls: arrows to move, C to jump, X to dash, R to restart, N for next.
 
 (() => {
   const canvas = document.getElementById("game");
@@ -9,92 +9,281 @@
   const TILE = 16;
   const COLS = 40;
   const ROWS = 22;
-  const W = COLS * TILE; // 640
-  const H = ROWS * TILE; // 352
+  const W = COLS * TILE;
+  const H = ROWS * TILE;
 
-  // ----- Fullscreen scaling: nearest-neighbor to integer pixels -----
-  const fit = () => {
-    const sx = window.innerWidth / W;
-    const sy = window.innerHeight / H;
-    const s = Math.max(1, Math.floor(Math.min(sx, sy)));
-    canvas.style.width = W * s + "px";
-    canvas.style.height = H * s + "px";
-  };
-  addEventListener("resize", fit);
-  fit();
+  // Canvas sizing handled by CSS (fills viewport at 16:9, letterboxes
+  // off-aspect). Browser nearest-neighbor scaling keeps the pixel-art crisp.
 
-  // ----- Palette (limited, arcade-era warm desert) -----
+  // ----- Palette -----
   const P = {
-    sky0: "#1a0a28",
-    sky1: "#3a1450",
-    sky2: "#6a2058",
-    sky3: "#b03058",
-    sky4: "#e8703a",
-    sky5: "#f4a850",
-    sky6: "#ffd070",
-    sunHot: "#fff0a0",
-    sunMid: "#ffd060",
-    sunRim: "#ff8038",
-    pyrDark: "#2a0e22",
-    pyrLit:  "#5a2030",
-    sand0:   "#c87838",
-    sand1:   "#7a3a18",
-    stoneA:  "#a86028",
-    stoneB:  "#7a3e18",
-    stoneC:  "#5a2a10",
-    stoneTop:"#f0c878",
-    stoneTopLo: "#e89858",
-    bone:    "#f0e0b8",
-    boneLo:  "#c0a070",
-    cactiA:  "#3a8050",
-    cactiB:  "#54a070",
-    cactiC:  "#1a4828",
-    cactiSpine: "#f0e0a0",
-    crystal:    "#ff6a8a",
-    crystalLo:  "#a82a52",
-    crystalHi:  "#ffd0dc",
-    playerR:    "#e84a6a",
-    playerRhi:  "#ffc6d3",
-    playerB:    "#3a78c8",
-    playerBhi:  "#a6c8ff",
-    ink:        "#1a0a14",
-    goalDark:   "#3a1a26",
-    goalGold:   "#ffd070",
-    goalGlow:   "#fff0a0",
+    sky0: "#1a0a28", sky1: "#3a1450", sky2: "#6a2058", sky3: "#b03058",
+    sky4: "#e8703a", sky5: "#f4a850", sky6: "#ffd070",
+    sunHot: "#fff0a0", sunMid: "#ffd060", sunRim: "#ff8038",
+    pyrDark: "#2a0e22", pyrLit: "#5a2030",
+    sand0: "#c87838", sand1: "#7a3a18",
+    stoneA: "#a86028", stoneB: "#7a3e18", stoneC: "#5a2a10",
+    stoneTop: "#f0c878", stoneTopLo: "#e89858",
+    bone: "#f0e0b8", boneLo: "#c0a070",
+    cactiA: "#3a8050", cactiB: "#54a070", cactiC: "#1a4828", cactiSpine: "#f0e0a0",
+    crystal: "#ff6a8a", crystalLo: "#a82a52", crystalHi: "#ffd0dc",
+    ink: "#1a0a14",
+    goalDark: "#3a1a26", goalGold: "#ffd070", goalGlow: "#fff0a0",
   };
 
-  // Level legend:
-  // . empty  # solid  ^ spike-up  v spike-down  < spike-right  > spike-left
-  // c cactus (deadly on touch)  o crystal (refills dash)  * goal  p spawn
-  const RAW_LEVEL = [
-    "........................................",
-    "........................................",
-    "........................................",
-    ".......................................*",
-    "......................................##",
-    "....................................####",
-    ".................................o......",
-    "..............................o.........",
-    "............................###.........",
-    ".........................o..............",
-    "......................o.................",
-    "....................###.................",
-    "................o.......................",
-    "..............###.......................",
-    "............vvv.........................",
-    "..........o.............................",
-    "........###.........#...................",
-    "....................#...................",
-    "....o...............#............o......",
-    "p..c.......^^^^.....#......c......c.....",
-    "########################################",
-    "########################################",
+  // ----- Vampire sprite palette + frames (12 wide x 16 tall) -----
+  const SP = {
+    ".": null,
+    "k": "#0a0a12",   // hair / black outline
+    "w": "#ecd6c0",   // skin
+    "s": "#b8927a",   // skin shadow
+    "r": "#c41a26",   // red eyes / sash
+    "c": "#1a0a14",   // dark coat
+    "d": "#3a1822",   // coat highlight
+    "b": "#050208",   // boots
+  };
+  const SPRITES = {
+    idle: [
+      "....kkkk....",
+      "...kkkkkk...",
+      "..kkwwwwkk..",
+      "..kwwwwwwk..",
+      "..kwrrwrrk..",
+      "..kwwwwwwk..",
+      "..kkwsswkk..",
+      "..kkccccdk..",
+      ".kcrrrrrck.",
+      ".kcrrrrrck.",
+      ".kcccccccd.",
+      "..ccccccc...",
+      "..cc...cc...",
+      "..cc...cc...",
+      "..bb...bb...",
+      "..bb...bb...",
+    ],
+    walkA: [
+      "....kkkk....",
+      "...kkkkkk...",
+      "..kkwwwwkk..",
+      "..kwwwwwwk..",
+      "..kwrrwrrk..",
+      "..kwwwwwwk..",
+      "..kkwsswkk..",
+      "..kkccccdk..",
+      ".kcrrrrrck.",
+      ".kcrrrrrck.",
+      ".kcccccccd.",
+      "..ccccccc...",
+      "...cc.cc....",   // step (legs in)
+      "...cc.cc....",
+      "...bb.bb....",
+      "...bb.bb....",
+    ],
+    walkB: [
+      "....kkkk....",
+      "...kkkkkk...",
+      "..kkwwwwkk..",
+      "..kwwwwwwk..",
+      "..kwrrwrrk..",
+      "..kwwwwwwk..",
+      "..kkwsswkk..",
+      "..kkccccdk..",
+      ".kcrrrrrck.",
+      ".kcrrrrrck.",
+      ".kcccccccd.",
+      "..ccccccc...",
+      ".cc.....cc..",   // stride (legs out)
+      ".cc.....cc..",
+      ".bb.....bb..",
+      ".bb.....bb..",
+    ],
+    jump: [
+      "....kkkk....",
+      "...kkkkkk...",
+      "..kkwwwwkk..",
+      "..kwwwwwwk..",
+      "..kwrrwrrk..",
+      "..kwwwwwwk..",
+      "..kkwccwkk..",   // open mouth
+      "..kkccccdk..",
+      ".kcrrrrrck.",
+      ".kcrrrrrck.",
+      ".kcccccccd.",
+      "..ccccccc...",
+      "..cccccccc..",   // legs together raised
+      "..cccccccc..",
+      "...bbbbbb...",
+      "....bbbb....",
+    ],
+    fall: [
+      "....kkkk....",
+      "...kkkkkk...",
+      "..kkwwwwkk..",
+      "..kwwwwwwk..",
+      "..kwrrwrrk..",
+      "..kwwwwwwk..",
+      "..kkwsswkk..",
+      "..kkccccdk..",
+      ".kcrrrrrck.",
+      ".kcrrrrrck.",
+      ".kcccccccd.",
+      "..ccccccc...",
+      ".cc.....cc..",   // legs spread for landing
+      ".cc.....cc..",
+      ".bb.....bb..",
+      ".bb.....bb..",
+    ],
+    dash: [
+      "...kkkkkkk..",   // hair streaming
+      "..kkkkkkkk..",
+      ".kkkwwwwwk..",
+      ".kwwwwwwwk..",
+      "kkwrrwrrkk..",
+      "kwwwwwwwk...",
+      "kkwsswwkk...",
+      ".kkccccdk...",
+      "kcrrrrrck...",
+      "kcrrrrrck...",
+      "kccccccdk...",
+      ".cccccccd...",
+      "..ccccccc...",   // body forward, legs trailing
+      "..ccccc.....",
+      "..bbbb......",
+      "..bb........",
+    ],
+  };
+
+  // ----- Level catalogue -----
+  const LEVELS_RAW = [
+    // 1. The Foothills — chunky stepped blocks
+    [
+      "........................................",
+      "........................................",
+      "........................................",
+      ".......................................*",
+      "......................................##",
+      "....................................####",
+      "................................o.......",
+      "..............................c.........",
+      "............................###.........",
+      "............................###.........",
+      "............................###.........",
+      "......................o.................",
+      "....................c...................",
+      "..................###...................",
+      "..................###...................",
+      "..................###...................",
+      "..............o.........................",
+      "...........c............................",
+      ".........###............................",
+      "p........###....^^^^^^^^................",
+      "########################################",
+      "########################################",
+    ],
+    // 2. The Cavern — overhangs + ceiling spikes
+    [
+      "........................................",
+      "........................................",
+      "........................................",
+      ".....................................###",
+      ".....................................###",
+      ".................................vvvvv..",
+      "................................##......",
+      ".............................o..##......",
+      "..........................######.##.....",
+      "..........................######........",
+      "........................................",
+      ".............vvvvvvv....................",
+      "..............#####.....................",
+      "..............#####...o.................",
+      "............................###.........",
+      ".......o........................vvvvv...",
+      "....##########..........................",
+      "....##########..........................",
+      "................................###.....",
+      "p....................................c..",
+      "########################################",
+      "########################################",
+    ],
+    // 3. The Quarry — tall pillars
+    [
+      "........................................",
+      "........................................",
+      "........................................",
+      ".......................................*",
+      "......................................##",
+      "....................................####",
+      "...........................o............",
+      "..........................###...........",
+      "..........................###...........",
+      "..........................###...........",
+      "..........................###...........",
+      "...............c..........###...........",
+      "..............###.........###...........",
+      "..............###.........###...........",
+      "..............###.........###...........",
+      "..............###.........###...........",
+      ".....o........###.........###...........",
+      "....###.......###.........###...........",
+      "....###.......###.........###...........",
+      "p...###.......###.........###...........",
+      "########################################",
+      "########################################",
+    ],
+    // 4. The Spire — narrow vertical climb with alternating ledges
+    [
+      "........................................",
+      "..................*.....................",
+      ".................####...................",
+      "................######..................",
+      "........................................",
+      ".................###....................",
+      "...............c....c...................",
+      "...............######...................",
+      "...............######...................",
+      "..............o.........................",
+      "...##############.......................",
+      "...##############.......................",
+      ".................o......................",
+      ".................###############........",
+      ".................###############........",
+      "..............c.........................",
+      "..............###.......................",
+      "..............###.......................",
+      "........o...............................",
+      "p.......^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "########################################",
+      "########################################",
+    ],
+    // 5. The Apex — combination challenge
+    [
+      "........................................",
+      "........................................",
+      ".......................................*",
+      "......................................##",
+      ".....................................###",
+      "....................................####",
+      "..................................c.....",
+      "................................######..",
+      "................................######..",
+      ".....................o..................",
+      ".................vvvvvvv................",
+      "..........c..........###................",
+      ".........####.......####................",
+      ".........####...........................",
+      ".....o..................o...............",
+      "....####............vvvv.###............",
+      "....####............................###.",
+      ".................c.....................c",
+      "...............####............###....##",
+      "p..^^^...^^^...........^^^^...^^........",
+      "########################################",
+      "########################################",
+    ],
   ];
-  const LEVEL = RAW_LEVEL.map((r) => (r + ".".repeat(COLS)).slice(0, COLS));
 
   // ----- Tile helpers -----
   const SOLID = "#";
-  // Hazards: tile char -> hitbox rect inside the 16x16 tile.
   const HAZARDS = {
     "^": { hx: 0,  hy: 10, hw: 16, hh: 6  },
     "v": { hx: 0,  hy: 0,  hw: 16, hh: 6  },
@@ -104,11 +293,43 @@
   };
   const SPIKE_RENDER = { "^": "up", "v": "down", "<": "right", ">": "left" };
 
+  // Current loaded level state
+  let levelIdx = 0;
+  let LEVEL = [];
+  let spawn = { x: 0, y: 0 };
+  let goal = null;
+  let crystals = [];
+
   const tileAt = (cx, cy) => {
     if (cx < 0 || cx >= COLS || cy < 0 || cy >= ROWS) return SOLID;
     return LEVEL[cy][cx];
   };
   const isSolid = (cx, cy) => tileAt(cx, cy) === SOLID;
+
+  const findChar = (ch) => {
+    for (let y = 0; y < ROWS; y++) {
+      const r = LEVEL[y];
+      for (let x = 0; x < r.length; x++) if (r[x] === ch) return { cx: x, cy: y };
+    }
+    return null;
+  };
+
+  const loadLevel = (idx) => {
+    levelIdx = idx;
+    const raw = LEVELS_RAW[idx];
+    LEVEL = raw.map((r) => (r + ".".repeat(COLS)).slice(0, COLS));
+    const sp = findChar("p");
+    spawn = { x: sp.cx * TILE, y: sp.cy * TILE };
+    goal = findChar("*");
+    crystals = [];
+    LEVEL.forEach((row, y) => {
+      for (let x = 0; x < row.length; x++) {
+        if (row[x] === "o")
+          crystals.push({ cx: x, cy: y, taken: false, respawn: 0, t: Math.random() * Math.PI * 2 });
+      }
+    });
+    reset();
+  };
 
   // ----- Input -----
   const keys = {};
@@ -124,13 +345,12 @@
     keys[e.key.toLowerCase()] = false;
   });
 
-  // ----- Particles (chunky pixel squares only) -----
+  // ----- Particles -----
   const particles = [];
   const addParticle = (x, y, vx, vy, life, color, size = 2) =>
     particles.push({ x, y, vx, vy, life, max: life, color, size });
 
-  // ----- Background composition (pre-computed) -----
-  // Half-set sun centered, three pyramids in front, flat horizon, sand.
+  // ----- Background (pre-baked once) -----
   const SUN = { x: Math.floor(W * 0.5), y: Math.floor(H * 0.5), r: 44 };
   const HORIZON = Math.floor(H * 0.62);
   const pyramids = [
@@ -145,13 +365,11 @@
   for (let i = 0; i < 14; i++)
     stars.push({ x: Math.floor(Math.random() * W), y: Math.floor(Math.random() * 60) });
 
-  // Pre-bake the static background to an offscreen canvas.
   const bgCanvas = document.createElement("canvas");
   bgCanvas.width = W; bgCanvas.height = H;
   const bx = bgCanvas.getContext("2d");
   bx.imageSmoothingEnabled = false;
 
-  // 4x4 Bayer dither matrix for two-color band transitions
   const BAYER = [
     [0,  8,  2, 10],
     [12, 4, 14,  6],
@@ -168,12 +386,8 @@
 
   const drawBandedSky = (g) => {
     const bands = [
-      { y: 0,   c: P.sky0 },
-      { y: 30,  c: P.sky1 },
-      { y: 70,  c: P.sky2 },
-      { y: 110, c: P.sky3 },
-      { y: 160, c: P.sky4 },
-      { y: 200, c: P.sky5 },
+      { y: 0,   c: P.sky0 }, { y: 30,  c: P.sky1 }, { y: 70,  c: P.sky2 },
+      { y: 110, c: P.sky3 }, { y: 160, c: P.sky4 }, { y: 200, c: P.sky5 },
       { y: 230, c: P.sky6 },
     ];
     for (let i = 0; i < bands.length; i++) {
@@ -184,9 +398,9 @@
     }
     for (let i = 0; i + 1 < bands.length; i++) {
       const seam = bands[i + 1].y;
-      ditherRow(g, seam - 2, bands[i].c,     bands[i + 1].c, 6);
-      ditherRow(g, seam - 1, bands[i].c,     bands[i + 1].c, 10);
-      ditherRow(g, seam,     bands[i + 1].c, bands[i].c,     6);
+      ditherRow(g, seam - 2, bands[i].c, bands[i + 1].c, 6);
+      ditherRow(g, seam - 1, bands[i].c, bands[i + 1].c, 10);
+      ditherRow(g, seam,     bands[i + 1].c, bands[i].c, 6);
     }
   };
 
@@ -205,7 +419,6 @@
         g.fillRect(SUN.x - inner, y, inner * 2, 1);
       }
     }
-    // Rim shadow on lower arc
     for (let a = Math.PI; a <= Math.PI * 2; a += 0.06) {
       const px = Math.floor(SUN.x + Math.cos(a) * r);
       const py = Math.floor(SUN.y + Math.sin(a) * r);
@@ -213,7 +426,6 @@
       g.fillStyle = P.sunRim;
       g.fillRect(px, py, 1, 1);
     }
-    // Horizon glare band
     g.fillStyle = "#ffb060";
     g.fillRect(SUN.x - r - 6, HORIZON, (r + 6) * 2, 1);
     g.fillStyle = "#ffd070";
@@ -228,7 +440,6 @@
       g.fillStyle = P.pyrDark;
       g.fillRect(py.cx - w, y, w * 2, 1);
     }
-    // Lit edge on the side facing the sun
     const sunSide = py.cx < SUN.x ? +1 : -1;
     for (let i = 0; i < py.h; i++) {
       const w = Math.floor((half * (i + 1)) / py.h);
@@ -258,7 +469,6 @@
         bx.fillRect(c.x + 3, baseY - c.h + 1, 1, 3);
       }
     });
-    // Sand foreground (two flat bands with a row of dither between)
     bx.fillStyle = P.sand0;
     bx.fillRect(0, HORIZON, W, H - HORIZON);
     bx.fillStyle = P.sand1;
@@ -278,29 +488,9 @@
   };
   drawBackgroundToCache();
 
-  // ----- Crystals -----
-  const crystals = [];
-  LEVEL.forEach((row, y) => {
-    for (let x = 0; x < row.length; x++) {
-      if (row[x] === "o")
-        crystals.push({ cx: x, cy: y, taken: false, respawn: 0, t: Math.random() * Math.PI * 2 });
-    }
-  });
-
   // ----- Player -----
-  const findChar = (ch) => {
-    for (let y = 0; y < ROWS; y++) {
-      const r = LEVEL[y];
-      for (let x = 0; x < r.length; x++) if (r[x] === ch) return { cx: x, cy: y };
-    }
-    return null;
-  };
-  const spawnCell = findChar("p");
-  const spawn = { x: spawnCell.cx * TILE, y: spawnCell.cy * TILE };
-  const goal = findChar("*");
-
   const player = {
-    x: spawn.x, y: spawn.y,
+    x: 0, y: 0,
     w: 10, h: 12,
     vx: 0, vy: 0,
     facing: 1,
@@ -312,9 +502,9 @@
     dashDX: 0, dashDY: 0,
     dead: false, deadTimer: 0,
     won: false, winTimer: 0,
+    walkTime: 0, walkFrame: 0,
   };
 
-  // ----- Tuning -----
   const GRAV = 600;
   const MAX_FALL = 320;
   const MOVE_ACC = 1200;
@@ -332,7 +522,6 @@
   const DASH_BUF_MAX = 0.12;
   const DASH_BUF_WAIT = 0.035;
 
-  // ----- Collision -----
   const moveX = (dx) => {
     player.x += dx;
     const left = Math.floor(player.x / TILE);
@@ -394,7 +583,7 @@
     return false;
   };
 
-  const reset = () => {
+  function reset() {
     player.x = spawn.x; player.y = spawn.y;
     player.vx = 0; player.vy = 0;
     player.facing = 1;
@@ -403,8 +592,9 @@
     player.dashBuffer = 0; player.dashBufferAge = 0;
     player.dead = false; player.deadTimer = 0;
     player.won = false; player.winTimer = 0;
+    player.walkTime = 0; player.walkFrame = 0;
     crystals.forEach((c) => { c.taken = false; c.respawn = 0; });
-  };
+  }
 
   const kill = () => {
     if (player.dead) return;
@@ -418,7 +608,7 @@
         Math.cos(a) * (60 + Math.random() * 40),
         Math.sin(a) * (60 + Math.random() * 40),
         0.5 + Math.random() * 0.3,
-        Math.random() < 0.5 ? P.sunMid : P.sunRim,
+        Math.random() < 0.5 ? P.sunMid : "#c41a26",
         2,
       );
     }
@@ -430,12 +620,7 @@
     const dt = Math.min(1 / 30, (now - last) / 1000);
     last = now;
 
-    if (pressed["r"]) reset();
-
-    if (player.dead) {
-      player.deadTimer -= dt;
-      if (player.deadTimer <= 0) reset();
-    } else if (player.won) {
+    if (player.won) {
       player.winTimer += dt;
       if (Math.random() < 0.4)
         addParticle(
@@ -447,7 +632,24 @@
           P.goalGlow,
           2,
         );
+      // Menu: R = retry, N = next level
+      if (pressed["r"]) {
+        reset();
+      } else if (pressed["n"]) {
+        if (levelIdx + 1 < LEVELS_RAW.length) loadLevel(levelIdx + 1);
+        else loadLevel(0);
+      }
+    } else if (pressed["r"]) {
+      reset();
+    } else if (player.dead) {
+      player.deadTimer -= dt;
+      if (player.deadTimer <= 0) reset();
     } else {
+      // Jump levels with 1..5 hotkeys for quick navigation while testing
+      for (let i = 1; i <= LEVELS_RAW.length; i++) {
+        if (pressed[String(i)]) { loadLevel(i - 1); return requestAnimationFrame(tick); }
+      }
+
       const ix = (keys["arrowright"] ? 1 : 0) - (keys["arrowleft"] ? 1 : 0);
       const iy = (keys["arrowdown"] ? 1 : 0) - (keys["arrowup"] ? 1 : 0);
       if (ix !== 0) player.facing = ix;
@@ -507,11 +709,8 @@
               addParticle(
                 player.x + player.w / 2,
                 player.y + player.h / 2,
-                Math.cos(a) * sp,
-                Math.sin(a) * sp,
-                0.3 + Math.random() * 0.25,
-                "#ffffff",
-                2,
+                Math.cos(a) * sp, Math.sin(a) * sp,
+                0.3 + Math.random() * 0.25, "#ffffff", 2,
               );
             }
           }
@@ -542,11 +741,8 @@
           addParticle(
             player.x + player.w / 2 + (Math.random() - 0.5) * player.w,
             player.y + player.h,
-            (Math.random() - 0.5) * 40,
-            -20 - Math.random() * 20,
-            0.35,
-            P.stoneTop,
-            1,
+            (Math.random() - 0.5) * 40, -20 - Math.random() * 20,
+            0.35, P.stoneTop, 1,
           );
       }
       if (!keys["c"] && player.vy < 0 && player.dashTime <= 0) {
@@ -562,14 +758,23 @@
           addParticle(
             player.x + player.w / 2 + (Math.random() - 0.5) * player.w,
             player.y + player.h,
-            (Math.random() - 0.5) * 50,
-            -10 - Math.random() * 15,
-            0.3,
-            P.sand1,
-            1,
+            (Math.random() - 0.5) * 50, -10 - Math.random() * 15,
+            0.3, P.sand1, 1,
           );
       }
       if (player.onGround) player.dashCharges = 1;
+
+      // Walking animation timer (steps every 0.12s while moving on ground)
+      if (player.onGround && Math.abs(player.vx) > 10) {
+        player.walkTime += dt;
+        if (player.walkTime > 0.12) {
+          player.walkTime = 0;
+          player.walkFrame = (player.walkFrame + 1) % 2;
+        }
+      } else {
+        player.walkTime = 0;
+        player.walkFrame = 0;
+      }
 
       crystals.forEach((c) => {
         if (c.taken) {
@@ -612,10 +817,8 @@
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       p.life -= dt;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vx *= 1 - dt * 1.5;
-      p.vy *= 1 - dt * 1.5;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= 1 - dt * 1.5; p.vy *= 1 - dt * 1.5;
       if (p.life <= 0) particles.splice(i, 1);
     }
 
@@ -679,76 +882,69 @@
     }
   };
 
-  // Pixel-art saguaro cactus (16x16)
   const drawCactus = (x, y) => {
-    // Trunk
-    ctx.fillStyle = P.cactiA;
-    ctx.fillRect(x + 7, y + 1, 2, 15);
-    ctx.fillStyle = P.cactiB;
-    ctx.fillRect(x + 7, y + 1, 1, 15);
-    ctx.fillStyle = P.cactiC;
-    ctx.fillRect(x + 8, y + 1, 1, 15);
-
-    // Left arm
-    ctx.fillStyle = P.cactiA;
-    ctx.fillRect(x + 3, y + 4, 2, 4);
-    ctx.fillRect(x + 4, y + 6, 4, 2);
-    ctx.fillStyle = P.cactiB;
-    ctx.fillRect(x + 3, y + 4, 1, 4);
-    ctx.fillRect(x + 4, y + 6, 4, 1);
-    ctx.fillStyle = P.cactiC;
-    ctx.fillRect(x + 4, y + 4, 1, 2);
-
-    // Right arm
-    ctx.fillStyle = P.cactiA;
-    ctx.fillRect(x + 11, y + 3, 2, 5);
-    ctx.fillRect(x + 9, y + 6, 3, 2);
-    ctx.fillStyle = P.cactiB;
-    ctx.fillRect(x + 11, y + 3, 1, 5);
-    ctx.fillRect(x + 9, y + 6, 3, 1);
-    ctx.fillStyle = P.cactiC;
-    ctx.fillRect(x + 12, y + 3, 1, 5);
-
-    // Spines
+    ctx.fillStyle = P.cactiA; ctx.fillRect(x + 7, y + 1, 2, 15);
+    ctx.fillStyle = P.cactiB; ctx.fillRect(x + 7, y + 1, 1, 15);
+    ctx.fillStyle = P.cactiC; ctx.fillRect(x + 8, y + 1, 1, 15);
+    ctx.fillStyle = P.cactiA; ctx.fillRect(x + 3, y + 4, 2, 4); ctx.fillRect(x + 4, y + 6, 4, 2);
+    ctx.fillStyle = P.cactiB; ctx.fillRect(x + 3, y + 4, 1, 4); ctx.fillRect(x + 4, y + 6, 4, 1);
+    ctx.fillStyle = P.cactiC; ctx.fillRect(x + 4, y + 4, 1, 2);
+    ctx.fillStyle = P.cactiA; ctx.fillRect(x + 11, y + 3, 2, 5); ctx.fillRect(x + 9, y + 6, 3, 2);
+    ctx.fillStyle = P.cactiB; ctx.fillRect(x + 11, y + 3, 1, 5); ctx.fillRect(x + 9, y + 6, 3, 1);
+    ctx.fillStyle = P.cactiC; ctx.fillRect(x + 12, y + 3, 1, 5);
     ctx.fillStyle = P.cactiSpine;
-    ctx.fillRect(x + 7, y + 3, 1, 1);
-    ctx.fillRect(x + 8, y + 7, 1, 1);
-    ctx.fillRect(x + 7, y + 11, 1, 1);
-    ctx.fillRect(x + 8, y + 14, 1, 1);
-    ctx.fillRect(x + 3, y + 5, 1, 1);
-    ctx.fillRect(x + 12, y + 4, 1, 1);
+    ctx.fillRect(x + 7, y + 3, 1, 1); ctx.fillRect(x + 8, y + 7, 1, 1);
+    ctx.fillRect(x + 7, y + 11, 1, 1); ctx.fillRect(x + 8, y + 14, 1, 1);
+    ctx.fillRect(x + 3, y + 5, 1, 1); ctx.fillRect(x + 12, y + 4, 1, 1);
+    ctx.fillStyle = P.stoneC; ctx.fillRect(x + 6, y + 15, 5, 1);
+  };
 
-    // Ground shadow
-    ctx.fillStyle = P.stoneC;
-    ctx.fillRect(x + 6, y + 15, 5, 1);
+  // Render a 12x16 sprite at (x,y). If flipped, mirror horizontally.
+  const drawSprite = (frame, x, y, flipX) => {
+    for (let py = 0; py < frame.length; py++) {
+      const row = frame[py];
+      for (let px = 0; px < row.length; px++) {
+        const ch = row[px];
+        const col = SP[ch];
+        if (!col) continue;
+        const dx = flipX ? row.length - 1 - px : px;
+        ctx.fillStyle = col;
+        ctx.fillRect(x + dx, y + py, 1, 1);
+      }
+    }
   };
 
   const drawPlayer = () => {
     const px = Math.round(player.x);
     const py = Math.round(player.y);
+
+    // Dash trail (chunky pixel ghosts)
     if (player.dashTime > 0) {
-      ctx.fillStyle = "rgba(255,240,160,0.45)";
-      ctx.fillRect(px - player.dashDX * 4, py - player.dashDY * 4, player.w, player.h);
+      const tint = "rgba(255,240,160,0.45)";
+      ctx.fillStyle = tint;
+      ctx.fillRect(Math.round(px - player.dashDX * 4) - 1, Math.round(py - player.dashDY * 4) - 4, 12, 16);
       ctx.fillStyle = "rgba(255,240,160,0.22)";
-      ctx.fillRect(px - player.dashDX * 8, py - player.dashDY * 8, player.w, player.h);
+      ctx.fillRect(Math.round(px - player.dashDX * 8) - 1, Math.round(py - player.dashDY * 8) - 4, 12, 16);
     }
-    const body = player.dashCharges > 0 ? P.playerR : P.playerB;
-    const hi   = player.dashCharges > 0 ? P.playerRhi : P.playerBhi;
-    ctx.fillStyle = P.ink;
-    ctx.fillRect(px - 1, py - 1, player.w + 2, player.h + 2);
-    ctx.fillStyle = body;
-    ctx.fillRect(px, py, player.w, player.h);
-    ctx.fillStyle = hi;
-    ctx.fillRect(px + 1, py + 1, player.w - 2, 2);
-    ctx.fillRect(px + 1, py + 1, 2, player.h - 2);
-    ctx.fillStyle = P.ink;
-    ctx.fillRect(px + player.w - 2, py + 2, 1, player.h - 3);
-    ctx.fillRect(px + 2, py + player.h - 2, player.w - 3, 1);
-    ctx.fillStyle = "#fff";
-    const ex = player.facing > 0 ? px + player.w - 4 : px + 2;
-    ctx.fillRect(ex, py + 5, 2, 2);
-    ctx.fillStyle = P.ink;
-    ctx.fillRect(ex + (player.facing > 0 ? 1 : 0), py + 5, 1, 2);
+
+    // Pick frame
+    let frame;
+    if (player.dashTime > 0) frame = SPRITES.dash;
+    else if (!player.onGround && player.vy < -20) frame = SPRITES.jump;
+    else if (!player.onGround) frame = SPRITES.fall;
+    else if (Math.abs(player.vx) > 10) frame = player.walkFrame === 0 ? SPRITES.walkA : SPRITES.walkB;
+    else frame = SPRITES.idle;
+
+    // Sprite is 12 wide, hitbox 10 — center horizontally (offset -1).
+    // Sprite is 16 tall, hitbox 12 — anchor to bottom (offset -4).
+    drawSprite(frame, px - 1, py - 4, player.facing < 0);
+
+    // Dash-available halo: a faint red rim pixel ring when dash ready
+    if (player.dashCharges > 0 && player.dashTime <= 0) {
+      ctx.fillStyle = "rgba(255,80,110,0.5)";
+      ctx.fillRect(px + 4, py - 5, 4, 1);
+      ctx.fillRect(px + 4, py + player.h + 1, 4, 1);
+    }
   };
 
   const draw = () => {
@@ -762,13 +958,11 @@
       if (c.taken) return;
       const cx = c.cx * TILE + TILE / 2;
       const cy = c.cy * TILE + TILE / 2 + Math.sin(c.t) * 1.5;
-      // Sparkle pixels
       ctx.fillStyle = P.crystal;
       ctx.fillRect(cx - 1, cy - 5, 2, 1);
       ctx.fillRect(cx - 1, cy + 4, 2, 1);
       ctx.fillRect(cx - 5, cy - 1, 1, 2);
       ctx.fillRect(cx + 4, cy - 1, 1, 2);
-      // Diamond body
       const drawDiamond = (r, color) => {
         ctx.fillStyle = color;
         for (let dy = -r; dy <= r; dy++) {
@@ -814,20 +1008,43 @@
     });
     ctx.globalAlpha = 1;
 
+    // Level number in top-left corner (small text, drop shadow)
+    ctx.fillStyle = "#000";
+    ctx.font = "10px 'Courier New', monospace";
+    ctx.textAlign = "left";
+    ctx.fillText(`LEVEL ${levelIdx + 1} / ${LEVELS_RAW.length}`, 7, 13);
+    ctx.fillStyle = P.goalGold;
+    ctx.fillText(`LEVEL ${levelIdx + 1} / ${LEVELS_RAW.length}`, 6, 12);
+
     if (player.won) {
-      ctx.fillStyle = `rgba(10,5,12,${Math.min(0.7, player.winTimer * 0.6)})`;
+      ctx.fillStyle = `rgba(10,5,12,${Math.min(0.75, player.winTimer * 0.6)})`;
       ctx.fillRect(0, 0, W, H);
-      if (player.winTimer > 0.4) {
-        ctx.fillStyle = P.goalGold;
-        ctx.font = "20px 'Courier New', monospace";
+      if (player.winTimer > 0.3) {
         ctx.textAlign = "center";
-        ctx.fillText("THE OBELISK SINGS", W / 2, H / 2 - 6);
+        const lastLevel = levelIdx + 1 >= LEVELS_RAW.length;
+        ctx.fillStyle = P.goalGold;
+        ctx.font = "22px 'Courier New', monospace";
+        ctx.fillText(lastLevel ? "ALL LEVELS CLEAR" : `LEVEL ${levelIdx + 1} COMPLETE`, W / 2, H / 2 - 28);
         ctx.fillStyle = P.sand0;
         ctx.font = "11px 'Courier New', monospace";
-        ctx.fillText("press R to drift again", W / 2, H / 2 + 14);
+        ctx.fillText("THE OBELISK SINGS", W / 2, H / 2 - 8);
+
+        // Button-like labels
+        if (player.winTimer > 0.6) {
+          ctx.font = "13px 'Courier New', monospace";
+          if (lastLevel) {
+            ctx.fillStyle = "#ffb86a";
+            ctx.fillText("[R] PLAY AGAIN FROM LEVEL 1", W / 2, H / 2 + 24);
+          } else {
+            ctx.fillStyle = "#ffb86a";
+            ctx.fillText("[R] REPLAY     [N] NEXT LEVEL", W / 2, H / 2 + 24);
+          }
+        }
       }
     }
   };
 
+  // ----- Boot -----
+  loadLevel(0);
   requestAnimationFrame((t) => { last = t; tick(t); });
 })();

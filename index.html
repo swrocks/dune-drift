@@ -26,6 +26,11 @@
     image-rendering: crisp-edges;
     background: #0a0612;
     display: block;
+    /* Fill the viewport while keeping 16:9 aspect ratio.
+       On a 16:9 screen this is edge-to-edge; on other aspects we
+       letterbox the off-axis dimension. */
+    width: min(100vw, 177.78vh);   /* 100vh * 16/9 */
+    height: min(100vh, 56.25vw);   /* 100vw * 9/16 */
   }
   #hud {
     position: fixed;
@@ -47,7 +52,7 @@
   <canvas id="game" width="640" height="360"></canvas>
 </div>
 <div id="hud">
-  <b>&larr; &rarr;</b> MOVE &nbsp;&nbsp; <b>C</b> JUMP &nbsp;&nbsp; <b>X</b> DASH &nbsp;&nbsp; <b>R</b> RESTART
+  <b>&larr; &rarr;</b> MOVE &nbsp; <b>C</b> JUMP &nbsp; <b>X</b> DASH &nbsp; <b>R</b> RESTART &nbsp; <b>N</b> NEXT &nbsp; <b>1-5</b> JUMP TO LEVEL
 </div>
 <script src="game.js"></script>
 </body>
