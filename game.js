@@ -1,4 +1,4 @@
-// Dune Drift — a tiny precision platformer set at desert dusk.
+// Dune Drift — a tiny precision platformer at desert dusk.
 // Controls: arrows to move, C to jump, X to dash, R to restart room.
 
 (() => {
@@ -12,10 +12,62 @@
   const W = COLS * TILE; // 640
   const H = ROWS * TILE; // 352
 
-  // Legend:
+  // ----- Fullscreen scaling: nearest-neighbor to integer pixels -----
+  const fit = () => {
+    const sx = window.innerWidth / W;
+    const sy = window.innerHeight / H;
+    const s = Math.max(1, Math.floor(Math.min(sx, sy)));
+    canvas.style.width = W * s + "px";
+    canvas.style.height = H * s + "px";
+  };
+  addEventListener("resize", fit);
+  fit();
+
+  // ----- Palette (limited, arcade-era warm desert) -----
+  const P = {
+    sky0: "#1a0a28",
+    sky1: "#3a1450",
+    sky2: "#6a2058",
+    sky3: "#b03058",
+    sky4: "#e8703a",
+    sky5: "#f4a850",
+    sky6: "#ffd070",
+    sunHot: "#fff0a0",
+    sunMid: "#ffd060",
+    sunRim: "#ff8038",
+    pyrDark: "#2a0e22",
+    pyrLit:  "#5a2030",
+    sand0:   "#c87838",
+    sand1:   "#7a3a18",
+    stoneA:  "#a86028",
+    stoneB:  "#7a3e18",
+    stoneC:  "#5a2a10",
+    stoneTop:"#f0c878",
+    stoneTopLo: "#e89858",
+    bone:    "#f0e0b8",
+    boneLo:  "#c0a070",
+    cactiA:  "#3a8050",
+    cactiB:  "#54a070",
+    cactiC:  "#1a4828",
+    cactiSpine: "#f0e0a0",
+    crystal:    "#ff6a8a",
+    crystalLo:  "#a82a52",
+    crystalHi:  "#ffd0dc",
+    playerR:    "#e84a6a",
+    playerRhi:  "#ffc6d3",
+    playerB:    "#3a78c8",
+    playerBhi:  "#a6c8ff",
+    ink:        "#1a0a14",
+    goalDark:   "#3a1a26",
+    goalGold:   "#ffd070",
+    goalGlow:   "#fff0a0",
+  };
+
+  // Level legend:
   // . empty  # solid  ^ spike-up  v spike-down  < spike-right  > spike-left
-  // o crystal (refills dash)  * goal  p player spawn
+  // c cactus (deadly on touch)  o crystal (refills dash)  * goal  p spawn
   const RAW_LEVEL = [
+    "........................................",
     "........................................",
     "........................................",
     ".......................................*",
@@ -25,17 +77,16 @@
     "..............................o.........",
     "............................###.........",
     ".........................o..............",
-    "........................................",
     "......................o.................",
     "....................###.................",
     "................o.......................",
     "..............###.......................",
     "............vvv.........................",
     "..........o.............................",
-    "........###.............................",
-    "........................................",
-    "....o.......................o...........",
-    "p..........^^^^^^..........###..........",
+    "........###.........#...................",
+    "....................#...................",
+    "....o...............#............o......",
+    "p..c.......^^^^.....#......c......c.....",
     "########################################",
     "########################################",
   ];
@@ -43,7 +94,15 @@
 
   // ----- Tile helpers -----
   const SOLID = "#";
-  const SPIKES = { "^": "up", v: "down", "<": "right", ">": "left" };
+  // Hazards: tile char -> hitbox rect inside the 16x16 tile.
+  const HAZARDS = {
+    "^": { hx: 0,  hy: 10, hw: 16, hh: 6  },
+    "v": { hx: 0,  hy: 0,  hw: 16, hh: 6  },
+    "<": { hx: 10, hy: 0,  hw: 6,  hh: 16 },
+    ">": { hx: 0,  hy: 0,  hw: 6,  hh: 16 },
+    "c": { hx: 2,  hy: 1,  hw: 12, hh: 15 },
+  };
+  const SPIKE_RENDER = { "^": "up", "v": "down", "<": "right", ">": "left" };
 
   const tileAt = (cx, cy) => {
     if (cx < 0 || cx >= COLS || cy < 0 || cy >= ROWS) return SOLID;
@@ -65,61 +124,161 @@
     keys[e.key.toLowerCase()] = false;
   });
 
-  // ----- Particles -----
+  // ----- Particles (chunky pixel squares only) -----
   const particles = [];
   const addParticle = (x, y, vx, vy, life, color, size = 2) =>
     particles.push({ x, y, vx, vy, life, max: life, color, size });
 
-  // ----- Background props (pre-baked) -----
-  // Sun
-  const SUN = { x: W * 0.72, y: H * 0.42, r: 38 };
-  // Distant mesas (far)
-  const farMesas = [];
-  for (let i = 0; i < 7; i++) {
-    farMesas.push({
-      x: i * 110 + (i % 2) * 30 - 40,
-      w: 80 + (i % 3) * 30,
-      h: 30 + ((i * 7) % 18),
-    });
-  }
-  // Mid plateaus
-  const midPlateaus = [];
-  for (let i = 0; i < 6; i++) {
-    midPlateaus.push({
-      x: i * 130 - 30 + (i % 2) * 40,
-      w: 90 + (i % 3) * 40,
-      h: 22 + ((i * 11) % 14),
-    });
-  }
-  // Pyramid silhouette (single landmark, behind the sun on the right)
-  const pyramid = { cx: W * 0.78, base: H * 0.65, w: 130, h: 70 };
-  // Cacti silhouettes scattered on far horizon
-  const cacti = [];
-  for (let i = 0; i < 9; i++) {
-    cacti.push({ x: 30 + i * 70 + ((i * 13) % 20), h: 8 + (i % 3) * 4 });
-  }
-  // Stars (faint, near top of sky)
+  // ----- Background composition (pre-computed) -----
+  // Half-set sun centered, three pyramids in front, flat horizon, sand.
+  const SUN = { x: Math.floor(W * 0.5), y: Math.floor(H * 0.5), r: 44 };
+  const HORIZON = Math.floor(H * 0.62);
+  const pyramids = [
+    { cx: Math.floor(W * 0.30), base: HORIZON, w: 70,  h: 44 },
+    { cx: Math.floor(W * 0.50), base: HORIZON, w: 110, h: 70 },
+    { cx: Math.floor(W * 0.72), base: HORIZON, w: 60,  h: 38 },
+  ];
+  const bgCacti = [];
+  for (let i = 0; i < 12; i++)
+    bgCacti.push({ x: 24 + i * 50 + ((i * 17) % 18), h: 5 + (i % 3) * 2 });
   const stars = [];
-  for (let i = 0; i < 24; i++)
-    stars.push({
-      x: Math.random() * W,
-      y: Math.random() * H * 0.4,
-      b: Math.random() * 0.5 + 0.3,
-    });
-  // Drifting sand/dust particles
-  const dust = [];
-  for (let i = 0; i < 70; i++)
-    dust.push({
-      x: Math.random() * W,
-      y: Math.random() * H,
-      vx: -10 - Math.random() * 30,
-      vy: -3 + Math.random() * 6,
-      r: Math.random() < 0.5 ? 1 : 2,
-      c: Math.random() < 0.5 ? "#f7d9a1" : "#e0a86c",
-      a: 0.25 + Math.random() * 0.5,
-    });
+  for (let i = 0; i < 14; i++)
+    stars.push({ x: Math.floor(Math.random() * W), y: Math.floor(Math.random() * 60) });
 
-  // ----- Crystals (dash refills) -----
+  // Pre-bake the static background to an offscreen canvas.
+  const bgCanvas = document.createElement("canvas");
+  bgCanvas.width = W; bgCanvas.height = H;
+  const bx = bgCanvas.getContext("2d");
+  bx.imageSmoothingEnabled = false;
+
+  // 4x4 Bayer dither matrix for two-color band transitions
+  const BAYER = [
+    [0,  8,  2, 10],
+    [12, 4, 14,  6],
+    [3, 11,  1,  9],
+    [15, 7, 13,  5],
+  ];
+  const ditherRow = (g, y, hi, lo, threshold) => {
+    for (let x = 0; x < W; x++) {
+      const t = BAYER[y & 3][x & 3];
+      g.fillStyle = t < threshold ? hi : lo;
+      g.fillRect(x, y, 1, 1);
+    }
+  };
+
+  const drawBandedSky = (g) => {
+    const bands = [
+      { y: 0,   c: P.sky0 },
+      { y: 30,  c: P.sky1 },
+      { y: 70,  c: P.sky2 },
+      { y: 110, c: P.sky3 },
+      { y: 160, c: P.sky4 },
+      { y: 200, c: P.sky5 },
+      { y: 230, c: P.sky6 },
+    ];
+    for (let i = 0; i < bands.length; i++) {
+      const top = bands[i].y;
+      const bot = i + 1 < bands.length ? bands[i + 1].y : HORIZON;
+      g.fillStyle = bands[i].c;
+      g.fillRect(0, top, W, bot - top);
+    }
+    for (let i = 0; i + 1 < bands.length; i++) {
+      const seam = bands[i + 1].y;
+      ditherRow(g, seam - 2, bands[i].c,     bands[i + 1].c, 6);
+      ditherRow(g, seam - 1, bands[i].c,     bands[i + 1].c, 10);
+      ditherRow(g, seam,     bands[i + 1].c, bands[i].c,     6);
+    }
+  };
+
+  const drawSun = (g) => {
+    const r = SUN.r;
+    for (let dy = -r; dy <= r; dy++) {
+      const span = Math.floor(Math.sqrt(r * r - dy * dy));
+      const y = SUN.y + dy;
+      if (y >= HORIZON) continue;
+      const innerR = r * 0.55;
+      const inner = Math.abs(dy) < innerR ? Math.floor(Math.sqrt(innerR * innerR - dy * dy)) : 0;
+      g.fillStyle = P.sunMid;
+      g.fillRect(SUN.x - span, y, span * 2, 1);
+      if (inner) {
+        g.fillStyle = P.sunHot;
+        g.fillRect(SUN.x - inner, y, inner * 2, 1);
+      }
+    }
+    // Rim shadow on lower arc
+    for (let a = Math.PI; a <= Math.PI * 2; a += 0.06) {
+      const px = Math.floor(SUN.x + Math.cos(a) * r);
+      const py = Math.floor(SUN.y + Math.sin(a) * r);
+      if (py >= HORIZON) continue;
+      g.fillStyle = P.sunRim;
+      g.fillRect(px, py, 1, 1);
+    }
+    // Horizon glare band
+    g.fillStyle = "#ffb060";
+    g.fillRect(SUN.x - r - 6, HORIZON, (r + 6) * 2, 1);
+    g.fillStyle = "#ffd070";
+    g.fillRect(SUN.x - r, HORIZON + 1, r * 2, 1);
+  };
+
+  const drawPyramid = (g, py) => {
+    const half = Math.floor(py.w / 2);
+    for (let i = 0; i < py.h; i++) {
+      const w = Math.floor((half * (i + 1)) / py.h);
+      const y = py.base - py.h + i;
+      g.fillStyle = P.pyrDark;
+      g.fillRect(py.cx - w, y, w * 2, 1);
+    }
+    // Lit edge on the side facing the sun
+    const sunSide = py.cx < SUN.x ? +1 : -1;
+    for (let i = 0; i < py.h; i++) {
+      const w = Math.floor((half * (i + 1)) / py.h);
+      const y = py.base - py.h + i;
+      g.fillStyle = P.pyrLit;
+      if (sunSide > 0) g.fillRect(py.cx + w - 2, y, 2, 1);
+      else g.fillRect(py.cx - w, y, 2, 1);
+    }
+    g.fillStyle = P.pyrLit;
+    g.fillRect(py.cx - 1, py.base - py.h, 2, 2);
+  };
+
+  const drawBackgroundToCache = () => {
+    drawBandedSky(bx);
+    bx.fillStyle = "#ffffff";
+    stars.forEach((s) => bx.fillRect(s.x, s.y, 1, 1));
+    drawSun(bx);
+    pyramids.forEach((p) => drawPyramid(bx, p));
+    bx.fillStyle = "#2a0e1a";
+    bgCacti.forEach((c) => {
+      const baseY = HORIZON - 1;
+      bx.fillRect(c.x, baseY - c.h, 2, c.h);
+      if (c.h > 6) {
+        bx.fillRect(c.x - 2, baseY - c.h + 2, 2, 1);
+        bx.fillRect(c.x - 2, baseY - c.h + 2, 1, 2);
+        bx.fillRect(c.x + 2, baseY - c.h + 3, 2, 1);
+        bx.fillRect(c.x + 3, baseY - c.h + 1, 1, 3);
+      }
+    });
+    // Sand foreground (two flat bands with a row of dither between)
+    bx.fillStyle = P.sand0;
+    bx.fillRect(0, HORIZON, W, H - HORIZON);
+    bx.fillStyle = P.sand1;
+    bx.fillRect(0, HORIZON + 22, W, H - HORIZON - 22);
+    for (let x = 0; x < W; x++) {
+      if (((x + 1) & 3) === 0) {
+        bx.fillStyle = P.sand1;
+        bx.fillRect(x, HORIZON + 19, 1, 1);
+        bx.fillRect(x, HORIZON + 21, 1, 1);
+      }
+      if ((x & 3) === 0) {
+        bx.fillStyle = P.sand0;
+        bx.fillRect(x, HORIZON + 22, 1, 1);
+        bx.fillRect(x, HORIZON + 24, 1, 1);
+      }
+    }
+  };
+  drawBackgroundToCache();
+
+  // ----- Crystals -----
   const crystals = [];
   LEVEL.forEach((row, y) => {
     for (let x = 0; x < row.length; x++) {
@@ -141,30 +300,21 @@
   const goal = findChar("*");
 
   const player = {
-    x: spawn.x,
-    y: spawn.y,
-    w: 10,
-    h: 12,
-    vx: 0,
-    vy: 0,
+    x: spawn.x, y: spawn.y,
+    w: 10, h: 12,
+    vx: 0, vy: 0,
     facing: 1,
     onGround: false,
-    coyote: 0,
-    jumpBuffer: 0,
+    coyote: 0, jumpBuffer: 0,
     dashCharges: 1,
-    dashBuffer: 0,
-    dashBufferAge: 0,
-    dashTime: 0,
-    dashCooldown: 0,
-    dashDX: 0,
-    dashDY: 0,
-    dead: false,
-    deadTimer: 0,
-    won: false,
-    winTimer: 0,
+    dashBuffer: 0, dashBufferAge: 0,
+    dashTime: 0, dashCooldown: 0,
+    dashDX: 0, dashDY: 0,
+    dead: false, deadTimer: 0,
+    won: false, winTimer: 0,
   };
 
-  // ----- Constants -----
+  // ----- Tuning -----
   const GRAV = 600;
   const MAX_FALL = 320;
   const MOVE_ACC = 1200;
@@ -179,13 +329,10 @@
   const DASH_TIME = 0.16;
   const DASH_COOLDOWN = 0.08;
   const DASH_END_SPEED = 130;
-  // Dash input window: when X is pressed we wait a couple frames so multi-key
-  // diagonal inputs (X + Up + Right pressed near-simultaneously) all land
-  // before the dash direction is committed.
   const DASH_BUF_MAX = 0.12;
-  const DASH_BUF_WAIT = 0.035; // ~2 frames at 60Hz
+  const DASH_BUF_WAIT = 0.035;
 
-  // ----- Collision: AABB vs tilemap, one axis at a time -----
+  // ----- Collision -----
   const moveX = (dx) => {
     player.x += dx;
     const left = Math.floor(player.x / TILE);
@@ -225,7 +372,7 @@
     }
   };
 
-  const spikeHit = () => {
+  const hazardHit = () => {
     const left = Math.floor(player.x / TILE);
     const right = Math.floor((player.x + player.w - 0.001) / TILE);
     const top = Math.floor(player.y / TILE);
@@ -233,29 +380,22 @@
     for (let cy = top; cy <= bot; cy++) {
       for (let cx = left; cx <= right; cx++) {
         const t = tileAt(cx, cy);
-        const dir = SPIKES[t];
-        if (!dir) continue;
+        const h = HAZARDS[t];
+        if (!h) continue;
         const sx = cx * TILE, sy = cy * TILE;
-        let hx = sx, hy = sy, hw = TILE, hh = TILE;
-        if (dir === "up") { hy = sy + 10; hh = 6; }
-        else if (dir === "down") { hh = 6; }
-        else if (dir === "right") { hx = sx + 10; hw = 6; }
-        else if (dir === "left") { hw = 6; }
         if (
-          player.x < hx + hw &&
-          player.x + player.w > hx &&
-          player.y < hy + hh &&
-          player.y + player.h > hy
-        )
-          return true;
+          player.x < sx + h.hx + h.hw &&
+          player.x + player.w > sx + h.hx &&
+          player.y < sy + h.hy + h.hh &&
+          player.y + player.h > sy + h.hy
+        ) return true;
       }
     }
     return false;
   };
 
   const reset = () => {
-    player.x = spawn.x;
-    player.y = spawn.y;
+    player.x = spawn.x; player.y = spawn.y;
     player.vx = 0; player.vy = 0;
     player.facing = 1;
     player.dashCharges = 1;
@@ -278,13 +418,13 @@
         Math.cos(a) * (60 + Math.random() * 40),
         Math.sin(a) * (60 + Math.random() * 40),
         0.5 + Math.random() * 0.3,
-        Math.random() < 0.5 ? "#ffb56a" : "#e85a3a",
+        Math.random() < 0.5 ? P.sunMid : P.sunRim,
         2,
       );
     }
   };
 
-  // ----- Update -----
+  // ----- Update loop -----
   let last = performance.now();
   const tick = (now) => {
     const dt = Math.min(1 / 30, (now - last) / 1000);
@@ -304,13 +444,11 @@
           (Math.random() - 0.5) * 30,
           -20 - Math.random() * 30,
           0.7,
-          "#fff2a8",
+          P.goalGlow,
           2,
         );
     } else {
-      const left = keys["arrowleft"] ? 1 : 0;
-      const right = keys["arrowright"] ? 1 : 0;
-      const ix = right - left;
+      const ix = (keys["arrowright"] ? 1 : 0) - (keys["arrowleft"] ? 1 : 0);
       const iy = (keys["arrowdown"] ? 1 : 0) - (keys["arrowup"] ? 1 : 0);
       if (ix !== 0) player.facing = ix;
 
@@ -327,7 +465,7 @@
             -player.dashDX * 40 + (Math.random() - 0.5) * 20,
             -player.dashDY * 40 + (Math.random() - 0.5) * 20,
             0.3 + Math.random() * 0.2,
-            "#fff2a8",
+            P.sunHot,
             2,
           );
         if (player.dashTime <= 0) {
@@ -337,10 +475,6 @@
           else player.vy = 0;
         }
       } else {
-        // Dash input buffering. On X press we open a window. If a diagonal
-        // is already held we fire immediately. If only one axis is held we
-        // wait ~2 frames in case the second key was pressed just after X.
-        // If nothing is held we wait the full buffer, then dash with facing.
         if (pressed["x"]) {
           player.dashBuffer = DASH_BUF_MAX;
           player.dashBufferAge = 0;
@@ -349,7 +483,6 @@
           player.dashBuffer -= dt;
           player.dashBufferAge += dt;
         }
-
         const canDash = player.dashCharges > 0 && player.dashCooldown <= 0;
         if (player.dashBuffer > 0 && canDash) {
           const dirCount = Math.abs(ix) + Math.abs(iy);
@@ -412,7 +545,7 @@
             (Math.random() - 0.5) * 40,
             -20 - Math.random() * 20,
             0.35,
-            "#f0c884",
+            P.stoneTop,
             1,
           );
       }
@@ -424,7 +557,6 @@
       player.onGround = false;
       moveX(player.vx * dt);
       moveY(player.vy * dt);
-      // Landing puff
       if (!wasGround && player.onGround) {
         for (let i = 0; i < 4; i++)
           addParticle(
@@ -433,7 +565,7 @@
             (Math.random() - 0.5) * 50,
             -10 - Math.random() * 15,
             0.3,
-            "#e0a86c",
+            P.sand1,
             1,
           );
       }
@@ -457,7 +589,7 @@
           player.dashCharges = Math.max(player.dashCharges, 1);
           for (let i = 0; i < 14; i++) {
             const a = (i / 14) * Math.PI * 2;
-            addParticle(cx, cy, Math.cos(a) * 60, Math.sin(a) * 60, 0.4, "#ff6a8a", 2);
+            addParticle(cx, cy, Math.cos(a) * 60, Math.sin(a) * 60, 0.4, P.crystal, 2);
           }
         }
       });
@@ -465,10 +597,8 @@
       if (goal) {
         const gx = goal.cx * TILE, gy = goal.cy * TILE;
         if (
-          player.x < gx + TILE &&
-          player.x + player.w > gx &&
-          player.y < gy + TILE &&
-          player.y + player.h > gy &&
+          player.x < gx + TILE && player.x + player.w > gx &&
+          player.y < gy + TILE && player.y + player.h > gy &&
           !player.won
         ) {
           player.won = true;
@@ -476,7 +606,7 @@
         }
       }
 
-      if (spikeHit() || player.y > H + 40) kill();
+      if (hazardHit() || player.y > H + 40) kill();
     }
 
     for (let i = particles.length - 1; i >= 0; i--) {
@@ -488,13 +618,6 @@
       p.vy *= 1 - dt * 1.5;
       if (p.life <= 0) particles.splice(i, 1);
     }
-    dust.forEach((s) => {
-      s.x += s.vx * dt;
-      s.y += s.vy * dt;
-      if (s.x < -4) { s.x = W + 4; s.y = Math.random() * H; }
-      if (s.y < -4) s.y = H + 4;
-      if (s.y > H + 4) s.y = -4;
-    });
 
     for (const k in pressed) delete pressed[k];
 
@@ -507,56 +630,31 @@
     const t = LEVEL[cy][cx];
     const x = cx * TILE, y = cy * TILE;
     if (t === SOLID) {
-      // Sandstone base
-      ctx.fillStyle = "#8c5a2b";
+      ctx.fillStyle = P.stoneA;
       ctx.fillRect(x, y, TILE, TILE);
-      ctx.fillStyle = "#b8763a";
-      ctx.fillRect(x + 1, y + 1, TILE - 2, TILE - 2);
-      // Sediment bands
-      ctx.fillStyle = "#a06530";
-      ctx.fillRect(x + 1, y + 5, TILE - 2, 1);
-      ctx.fillRect(x + 1, y + 10, TILE - 2, 1);
-      // Speckle
-      ctx.fillStyle = "#6e4220";
-      ctx.fillRect(x + 3, y + 3, 1, 1);
-      ctx.fillRect(x + 8, y + 7, 1, 1);
-      ctx.fillRect(x + 12, y + 12, 1, 1);
-      ctx.fillRect(x + 5, y + 13, 1, 1);
-      ctx.fillStyle = "#dca06a";
-      ctx.fillRect(x + 6, y + 4, 1, 1);
-      ctx.fillRect(x + 11, y + 8, 1, 1);
-      // Sandy crust top (where there's no block above)
+      ctx.fillStyle = P.stoneC;
+      ctx.fillRect(x + TILE - 2, y, 2, TILE);
+      ctx.fillRect(x, y + TILE - 2, TILE, 2);
+      ctx.fillStyle = P.stoneB;
+      ctx.fillRect(x + 2, y + 8, TILE - 4, 2);
       const above = tileAt(cx, cy - 1);
+      const leftN = tileAt(cx - 1, cy);
       if (above !== SOLID) {
-        ctx.fillStyle = "#e7b46a";
+        ctx.fillStyle = P.stoneTop;
         ctx.fillRect(x, y, TILE, 2);
-        ctx.fillStyle = "#f7d39a";
-        ctx.fillRect(x + 2, y, 3, 1);
-        ctx.fillRect(x + 8, y, 4, 1);
-        ctx.fillStyle = "#c98a48";
+        ctx.fillStyle = P.stoneTopLo;
         ctx.fillRect(x, y + 2, TILE, 1);
-        // sand grains spilling
-        ctx.fillStyle = "#e7b46a";
-        ctx.fillRect(x + 4, y + 3, 1, 1);
-        ctx.fillRect(x + 11, y + 3, 1, 1);
+        ctx.fillStyle = P.stoneTop;
+        ctx.fillRect(x + 3, y + 3, 1, 1);
+        ctx.fillRect(x + 10, y + 4, 1, 1);
       }
-      // Edge highlights
-      if (tileAt(cx - 1, cy) !== SOLID) {
-        ctx.fillStyle = "#d49860";
-        ctx.fillRect(x, y, 1, TILE);
+      if (leftN !== SOLID) {
+        ctx.fillStyle = P.stoneTop;
+        ctx.fillRect(x, y, 2, TILE);
       }
-      if (tileAt(cx + 1, cy) !== SOLID) {
-        ctx.fillStyle = "#5e3a18";
-        ctx.fillRect(x + TILE - 1, y, 1, TILE);
-      }
-      if (tileAt(cx, cy + 1) !== SOLID) {
-        ctx.fillStyle = "#5e3a18";
-        ctx.fillRect(x, y + TILE - 1, TILE, 1);
-      }
-    } else if (SPIKES[t]) {
-      const dir = SPIKES[t];
-      // Sun-bleached bone spikes
-      ctx.fillStyle = "#f0e2c0";
+    } else if (SPIKE_RENDER[t]) {
+      const dir = SPIKE_RENDER[t];
+      ctx.fillStyle = P.bone;
       const tri = (px, py, dx1, dy1, dx2, dy2, dx3, dy3) => {
         ctx.beginPath();
         ctx.moveTo(px + dx1, py + dy1);
@@ -571,202 +669,142 @@
         else if (dir === "right") tri(x, y + i * 5, TILE, 0, 6, 2.5, TILE, 5);
         else if (dir === "left") tri(x, y + i * 5, 0, 0, 10, 2.5, 0, 5);
       }
-      // shaded base
-      ctx.fillStyle = "#b89060";
+      ctx.fillStyle = P.boneLo;
       if (dir === "up") ctx.fillRect(x, y + TILE - 2, TILE, 2);
       else if (dir === "down") ctx.fillRect(x, y, TILE, 2);
       else if (dir === "right") ctx.fillRect(x + TILE - 2, y, 2, TILE);
       else if (dir === "left") ctx.fillRect(x, y, 2, TILE);
-      // tiny shadow line on each spike for pixel-art read
-      ctx.fillStyle = "#cdbb90";
-      for (let i = 0; i < 3; i++) {
-        if (dir === "up") ctx.fillRect(x + i * 5 + 2, y + 8, 1, TILE - 8);
-        else if (dir === "down") ctx.fillRect(x + i * 5 + 2, y + 1, 1, 6);
-      }
+    } else if (t === "c") {
+      drawCactus(x, y);
     }
   };
 
-  const drawBackground = () => {
-    // Dusk gradient sky
-    const sky = ctx.createLinearGradient(0, 0, 0, H);
-    sky.addColorStop(0, "#2c1340");
-    sky.addColorStop(0.35, "#7a2a55");
-    sky.addColorStop(0.6, "#e0633a");
-    sky.addColorStop(0.85, "#f4a25a");
-    sky.addColorStop(1, "#f7c884");
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, W, H);
+  // Pixel-art saguaro cactus (16x16)
+  const drawCactus = (x, y) => {
+    // Trunk
+    ctx.fillStyle = P.cactiA;
+    ctx.fillRect(x + 7, y + 1, 2, 15);
+    ctx.fillStyle = P.cactiB;
+    ctx.fillRect(x + 7, y + 1, 1, 15);
+    ctx.fillStyle = P.cactiC;
+    ctx.fillRect(x + 8, y + 1, 1, 15);
 
-    // Stars at top
-    stars.forEach((s) => {
-      ctx.fillStyle = `rgba(255,235,200,${s.b})`;
-      ctx.fillRect(s.x, s.y, 1, 1);
-    });
+    // Left arm
+    ctx.fillStyle = P.cactiA;
+    ctx.fillRect(x + 3, y + 4, 2, 4);
+    ctx.fillRect(x + 4, y + 6, 4, 2);
+    ctx.fillStyle = P.cactiB;
+    ctx.fillRect(x + 3, y + 4, 1, 4);
+    ctx.fillRect(x + 4, y + 6, 4, 1);
+    ctx.fillStyle = P.cactiC;
+    ctx.fillRect(x + 4, y + 4, 1, 2);
 
-    // Sun (pixel-stepped circle)
-    const r = SUN.r;
-    for (let dy = -r; dy <= r; dy++) {
-      const span = Math.floor(Math.sqrt(r * r - dy * dy));
-      const yy = SUN.y + dy;
-      // gradient: hot center to deep edge
-      const f = 1 - Math.abs(dy) / r;
-      const col = f > 0.7 ? "#fff2a0" : f > 0.4 ? "#ffb86a" : "#ee7a3a";
-      ctx.fillStyle = col;
-      ctx.fillRect(SUN.x - span, yy, span * 2, 1);
+    // Right arm
+    ctx.fillStyle = P.cactiA;
+    ctx.fillRect(x + 11, y + 3, 2, 5);
+    ctx.fillRect(x + 9, y + 6, 3, 2);
+    ctx.fillStyle = P.cactiB;
+    ctx.fillRect(x + 11, y + 3, 1, 5);
+    ctx.fillRect(x + 9, y + 6, 3, 1);
+    ctx.fillStyle = P.cactiC;
+    ctx.fillRect(x + 12, y + 3, 1, 5);
+
+    // Spines
+    ctx.fillStyle = P.cactiSpine;
+    ctx.fillRect(x + 7, y + 3, 1, 1);
+    ctx.fillRect(x + 8, y + 7, 1, 1);
+    ctx.fillRect(x + 7, y + 11, 1, 1);
+    ctx.fillRect(x + 8, y + 14, 1, 1);
+    ctx.fillRect(x + 3, y + 5, 1, 1);
+    ctx.fillRect(x + 12, y + 4, 1, 1);
+
+    // Ground shadow
+    ctx.fillStyle = P.stoneC;
+    ctx.fillRect(x + 6, y + 15, 5, 1);
+  };
+
+  const drawPlayer = () => {
+    const px = Math.round(player.x);
+    const py = Math.round(player.y);
+    if (player.dashTime > 0) {
+      ctx.fillStyle = "rgba(255,240,160,0.45)";
+      ctx.fillRect(px - player.dashDX * 4, py - player.dashDY * 4, player.w, player.h);
+      ctx.fillStyle = "rgba(255,240,160,0.22)";
+      ctx.fillRect(px - player.dashDX * 8, py - player.dashDY * 8, player.w, player.h);
     }
-    // Sun reflection band on horizon
-    ctx.fillStyle = "rgba(255,220,150,0.18)";
-    ctx.fillRect(0, SUN.y + r - 1, W, 3);
-
-    // Pyramid silhouette (drawn before mesas so mesas can overlap)
-    ctx.fillStyle = "#5a2a30";
-    const py = pyramid;
-    for (let i = 0; i < py.h; i++) {
-      const w = ((py.w / 2) * (i + 1)) / py.h;
-      ctx.fillRect(py.cx - w, py.base - py.h + i, w * 2, 1);
-    }
-    // Pyramid sun-lit edge
-    ctx.fillStyle = "#7a3a3a";
-    for (let i = 0; i < py.h; i++) {
-      const w = ((py.w / 2) * (i + 1)) / py.h;
-      ctx.fillRect(py.cx, py.base - py.h + i, w, 1);
-    }
-
-    // Far mesas
-    ctx.fillStyle = "#4a1f2e";
-    farMesas.forEach((m) => {
-      const top = H * 0.6 - m.h;
-      ctx.fillRect(m.x, top, m.w, m.h);
-      // Stepped top edge for plateau look
-      ctx.fillRect(m.x - 4, top + 2, m.w + 8, 1);
-    });
-
-    // Mid plateaus (closer / lower)
-    ctx.fillStyle = "#3a1825";
-    midPlateaus.forEach((m) => {
-      const top = H * 0.68 - m.h;
-      ctx.fillRect(m.x, top, m.w, m.h);
-      ctx.fillRect(m.x - 6, top + 3, m.w + 12, 2);
-    });
-
-    // Cacti (along horizon, dark silhouettes)
-    ctx.fillStyle = "#2a0f1a";
-    cacti.forEach((c) => {
-      const baseY = H * 0.72;
-      // trunk
-      ctx.fillRect(c.x, baseY - c.h, 2, c.h);
-      // arms
-      if (c.h > 9) {
-        ctx.fillRect(c.x - 3, baseY - c.h + 3, 3, 1);
-        ctx.fillRect(c.x - 3, baseY - c.h + 3, 1, 3);
-        ctx.fillRect(c.x + 2, baseY - c.h + 5, 3, 1);
-        ctx.fillRect(c.x + 4, baseY - c.h + 2, 1, 4);
-      }
-    });
-
-    // Foreground dunes (3 layers)
-    const dune = (yBase, col, amp, period, phase) => {
-      ctx.fillStyle = col;
-      ctx.beginPath();
-      ctx.moveTo(0, H);
-      for (let x = 0; x <= W; x += 4) {
-        const y = yBase + Math.sin((x / period) * Math.PI * 2 + phase) * amp;
-        ctx.lineTo(x, y);
-      }
-      ctx.lineTo(W, H);
-      ctx.closePath();
-      ctx.fill();
-    };
-    dune(H * 0.75, "#7a2a2a", 8, 200, 0.2);
-    dune(H * 0.82, "#5a1a22", 10, 170, 1.6);
-    dune(H * 0.9, "#2a0c18", 6, 130, 3.4);
-
-    // Drifting dust
-    dust.forEach((s) => {
-      ctx.globalAlpha = s.a;
-      ctx.fillStyle = s.c;
-      ctx.fillRect(s.x, s.y, s.r, s.r);
-    });
-    ctx.globalAlpha = 1;
+    const body = player.dashCharges > 0 ? P.playerR : P.playerB;
+    const hi   = player.dashCharges > 0 ? P.playerRhi : P.playerBhi;
+    ctx.fillStyle = P.ink;
+    ctx.fillRect(px - 1, py - 1, player.w + 2, player.h + 2);
+    ctx.fillStyle = body;
+    ctx.fillRect(px, py, player.w, player.h);
+    ctx.fillStyle = hi;
+    ctx.fillRect(px + 1, py + 1, player.w - 2, 2);
+    ctx.fillRect(px + 1, py + 1, 2, player.h - 2);
+    ctx.fillStyle = P.ink;
+    ctx.fillRect(px + player.w - 2, py + 2, 1, player.h - 3);
+    ctx.fillRect(px + 2, py + player.h - 2, player.w - 3, 1);
+    ctx.fillStyle = "#fff";
+    const ex = player.facing > 0 ? px + player.w - 4 : px + 2;
+    ctx.fillRect(ex, py + 5, 2, 2);
+    ctx.fillStyle = P.ink;
+    ctx.fillRect(ex + (player.facing > 0 ? 1 : 0), py + 5, 1, 2);
   };
 
   const draw = () => {
-    drawBackground();
+    ctx.drawImage(bgCanvas, 0, 0);
 
-    // Tiles
     for (let y = 0; y < ROWS; y++)
       for (let x = 0; x < LEVEL[y].length; x++)
         drawTile(x, y);
 
-    // Crystals (warm pink in this palette)
     crystals.forEach((c) => {
       if (c.taken) return;
       const cx = c.cx * TILE + TILE / 2;
       const cy = c.cy * TILE + TILE / 2 + Math.sin(c.t) * 1.5;
-      const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 16);
-      glow.addColorStop(0, "rgba(255,140,170,0.55)");
-      glow.addColorStop(1, "rgba(255,140,170,0)");
-      ctx.fillStyle = glow;
-      ctx.fillRect(cx - 16, cy - 16, 32, 32);
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(Math.PI / 4);
-      ctx.fillStyle = "#ff6a8a";
-      ctx.fillRect(-3, -3, 6, 6);
-      ctx.fillStyle = "#ffd0dc";
-      ctx.fillRect(-3, -3, 2, 2);
-      ctx.fillStyle = "#a82a52";
-      ctx.fillRect(1, 1, 2, 2);
-      ctx.restore();
+      // Sparkle pixels
+      ctx.fillStyle = P.crystal;
+      ctx.fillRect(cx - 1, cy - 5, 2, 1);
+      ctx.fillRect(cx - 1, cy + 4, 2, 1);
+      ctx.fillRect(cx - 5, cy - 1, 1, 2);
+      ctx.fillRect(cx + 4, cy - 1, 1, 2);
+      // Diamond body
+      const drawDiamond = (r, color) => {
+        ctx.fillStyle = color;
+        for (let dy = -r; dy <= r; dy++) {
+          const w = r - Math.abs(dy);
+          ctx.fillRect(cx - w, cy + dy, w * 2 + 1, 1);
+        }
+      };
+      drawDiamond(3, P.crystal);
+      drawDiamond(2, P.crystalLo);
+      ctx.fillStyle = P.crystalHi;
+      ctx.fillRect(cx - 1, cy - 2, 1, 1);
+      ctx.fillRect(cx - 2, cy - 1, 1, 1);
     });
 
-    // Goal — a small relic obelisk
     if (goal) {
       const gx = goal.cx * TILE, gy = goal.cy * TILE;
-      const t = performance.now() / 300;
-      const glow = ctx.createRadialGradient(gx + 8, gy + 8, 0, gx + 8, gy + 8, 30);
-      glow.addColorStop(0, "rgba(255,242,168,0.45)");
-      glow.addColorStop(1, "rgba(255,242,168,0)");
-      ctx.fillStyle = glow;
-      ctx.fillRect(gx - 22, gy - 22, 60, 60);
-      // obelisk body
-      ctx.fillStyle = "#3a1e2a";
+      const t = performance.now() / 280;
+      const pulse = Math.sin(t) * 0.5 + 0.5;
+      ctx.fillStyle = `rgba(255,224,128,${0.25 + pulse * 0.35})`;
+      for (let i = 0; i < 4; i++) {
+        ctx.fillRect(gx - 4 - i * 3, gy + 6, 2, 2);
+        ctx.fillRect(gx + 14 + i * 3, gy + 6, 2, 2);
+      }
+      ctx.fillStyle = P.goalDark;
       ctx.fillRect(gx + 5, gy + 2, 6, TILE - 2);
-      ctx.fillStyle = "#5a2e3a";
+      ctx.fillStyle = P.pyrLit;
       ctx.fillRect(gx + 5, gy + 2, 3, TILE - 2);
-      // glowing rune
-      const pulse = 0.5 + 0.5 * Math.sin(t);
-      ctx.fillStyle = `rgba(255,220,120,${0.6 + pulse * 0.4})`;
+      ctx.fillStyle = `rgba(255,224,128,${0.7 + pulse * 0.3})`;
       ctx.fillRect(gx + 7, gy + 6, 2, 2);
-      ctx.fillRect(gx + 7, gy + 10, 2, 2);
-      // cap
-      ctx.fillStyle = "#ffd76b";
+      ctx.fillRect(gx + 7, gy + 11, 2, 2);
+      ctx.fillStyle = P.goalGold;
       ctx.fillRect(gx + 4, gy, 8, 2);
       ctx.fillRect(gx + 6, gy - 1, 4, 1);
     }
 
-    // Player
-    if (!player.dead) {
-      const px = Math.round(player.x);
-      const py = Math.round(player.y);
-      if (player.dashTime > 0) {
-        ctx.fillStyle = "rgba(255,242,168,0.35)";
-        ctx.fillRect(px - player.dashDX * 4, py - player.dashDY * 4, player.w, player.h);
-        ctx.fillStyle = "rgba(255,242,168,0.2)";
-        ctx.fillRect(px - player.dashDX * 8, py - player.dashDY * 8, player.w, player.h);
-      }
-      const bodyColor = player.dashCharges > 0 ? "#e84a6a" : "#3a78c8";
-      const inner = player.dashCharges > 0 ? "#ffc6d3" : "#a6c8ff";
-      ctx.fillStyle = "#1a0a14";
-      ctx.fillRect(px - 1, py - 1, player.w + 2, player.h + 2);
-      ctx.fillStyle = bodyColor;
-      ctx.fillRect(px, py, player.w, player.h);
-      ctx.fillStyle = inner;
-      ctx.fillRect(px + 1, py + 1, player.w - 2, 3);
-      ctx.fillStyle = "#1a0a14";
-      const ex = player.facing > 0 ? px + player.w - 4 : px + 2;
-      ctx.fillRect(ex, py + 5, 2, 2);
-    }
+    if (!player.dead) drawPlayer();
 
     particles.forEach((p) => {
       const a = Math.max(0, p.life / p.max);
@@ -777,14 +815,14 @@
     ctx.globalAlpha = 1;
 
     if (player.won) {
-      ctx.fillStyle = `rgba(20,8,16,${Math.min(0.7, player.winTimer * 0.6)})`;
+      ctx.fillStyle = `rgba(10,5,12,${Math.min(0.7, player.winTimer * 0.6)})`;
       ctx.fillRect(0, 0, W, H);
       if (player.winTimer > 0.4) {
-        ctx.fillStyle = "#fff2a8";
+        ctx.fillStyle = P.goalGold;
         ctx.font = "20px 'Courier New', monospace";
         ctx.textAlign = "center";
         ctx.fillText("THE OBELISK SINGS", W / 2, H / 2 - 6);
-        ctx.fillStyle = "#f7d39a";
+        ctx.fillStyle = P.sand0;
         ctx.font = "11px 'Courier New', monospace";
         ctx.fillText("press R to drift again", W / 2, H / 2 + 14);
       }
